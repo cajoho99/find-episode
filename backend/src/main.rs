@@ -1,6 +1,9 @@
 use std::{fs::read_to_string, io, path::Path};
 
+use rocket::fairing::{Fairing, Info, Kind};
+use rocket::http::Header;
 use rocket::State;
+use rocket::{Request, Response};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -70,14 +73,39 @@ fn cli() {
         }
     }
 }
+#[get("/")]
+fn search_default(state: &State<MyConfig>) -> String {
+    let mut results: Vec<Video> = vec![];
+    for v in &state.videos {
+        results.push(Video {
+            id: v.id.clone(),
+            thumbnail: v.thumbnail.clone(),
+            title: v.title.clone(),
+            transcription: vec![],
+        });
+    }
+    return serde_json::to_string(&results).unwrap();
+}
 
 #[get("/<search>")]
 fn search(search: String, state: &State<MyConfig>) -> String {
+    let mut results: Vec<Video> = vec![];
+    if search.len() == 0 {
+        for v in &state.videos {
+            results.push(Video {
+                id: v.id.clone(),
+                thumbnail: v.thumbnail.clone(),
+                title: v.title.clone(),
+                transcription: vec![],
+            })
+        }
+
+        return serde_json::to_string(&results).unwrap();
+    }
+
     if search.len() < 4 {
         return format!("Too short search term...");
     }
-
-    let mut results: Vec<Video> = vec![];
 
     for v in &state.videos {
         let matching: Vec<TranscriptEntry> = v
@@ -99,6 +127,28 @@ fn search(search: String, state: &State<MyConfig>) -> String {
     serde_json::to_string(&results).unwrap()
 }
 
+pub struct CORS;
+
+#[rocket::async_trait]
+impl Fairing for CORS {
+    fn info(&self) -> Info {
+        Info {
+            name: "Add CORS headers to responses",
+            kind: Kind::Response,
+        }
+    }
+
+    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
+        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
+        response.set_header(Header::new(
+            "Access-Control-Allow-Methods",
+            "POST, GET, PATCH, OPTIONS",
+        ));
+        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
+        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+    }
+}
+
 #[rocket::main]
 async fn main() {
     let mut input: String = String::new();
@@ -115,8 +165,9 @@ async fn main() {
                 let config = MyConfig { videos: data };
 
                 let _rocket = rocket::build()
-                    .mount("/search", routes![search])
+                    .mount("/search", routes![search_default, search])
                     .manage(config)
+                    .attach(CORS)
                     .launch()
                     .await;
             } else {
